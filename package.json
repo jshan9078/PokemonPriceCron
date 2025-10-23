@@ -1,0 +1,36 @@
+{
+  "name": "pokemon-card-tracker",
+  "version": "1.0.0",
+  "description": "Pokemon TCG card portfolio tracker with price monitoring",
+  "type": "module",
+  "scripts": {
+    "populate:groups": "tsx scripts/populate-groups.ts",
+    "populate:products": "tsx scripts/populate-products.ts",
+    "populate:products:single": "tsx scripts/populate-products.ts --group-id",
+    "populate:products:test": "tsx scripts/populate-products.ts --limit=5",
+    "populate:prices": "tsx scripts/populate-price-history.ts",
+    "populate:prices:test": "tsx scripts/populate-price-history.ts --start-date=2024-02-08 --end-date=2024-02-10",
+    "populate:prices:verbose": "tsx scripts/populate-price-history.ts --verbose",
+    "populate:prices:single": "tsx scripts/populate-price-history.ts --date",
+    "populate:all": "npm run populate:groups && npm run populate:products && npm run populate:prices"
+  },
+  "keywords": [
+    "pokemon",
+    "tcg",
+    "cards",
+    "price-tracker"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "csv-parse": "^5.5.3",
+    "dotenv": "^16.3.1",
+    "tslib": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

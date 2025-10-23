@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/jonathan/Desktop/data/2024-02-08/3/**)",
+      "Bash(npx tsx:*)",
+      "Bash(for date in 2024-03-15 2024-06-01 2024-09-01 2024-12-01 2025-03-01 2025-06-01)",
+      "Bash(do echo \"=== $date ===\")",
+      "Bash(done)",
+      "Read(//Users/jonathan/Desktop/data/**)",
+      "Bash(for date in 2024-02-08 2024-05-01 2024-08-01 2024-11-01 2025-01-01 2025-05-01 2025-10-01)",
+      "Bash(ls:*)",
+      "Bash(node -e:*)",
+      "Bash(for date in 2024-12-01 2025-03-01 2025-06-01 2025-10-20)",
+      "Bash(for dir in /Users/jonathan/Desktop/Data/2024-12-29/85/*/)",
+      "Bash(do if [ -f \"$dirprices\" ])",
+      "Bash(then grep -l '\"\"productId\"\":566145' \"$dirprices\")",
+      "Bash(echo:*)",
+      "Bash(fi)",
+      "Bash(npx nuxi@latest init:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(cat:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
