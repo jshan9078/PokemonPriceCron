@@ -33,11 +33,12 @@ interface PriceUpdate {
  * Step 1: Download and extract today's price data from tcgcsv.com
  */
 async function downloadAndExtractTodaysData(): Promise<string> {
-  // Get today's date in local timezone (not UTC)
+  // Get today's date in EST timezone (tcgcsv.com follows US Eastern time)
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const estDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const year = estDate.getFullYear();
+  const month = String(estDate.getMonth() + 1).padStart(2, '0');
+  const day = String(estDate.getDate()).padStart(2, '0');
   const today = `${year}-${month}-${day}`;
 
   console.log(`\n📥 Downloading data for ${today} from tcgcsv.com...\n`);

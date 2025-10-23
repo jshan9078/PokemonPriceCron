@@ -1,148 +1,86 @@
 # Pokemon Card Price Updater - Daily Cron Job
 
-Automated daily cron job that downloads Pokemon card price data from [tcgcsv.com](https://tcgcsv.com) and updates a Supabase database with:
-- Market prices
-- Price history (JSONB)
-- 14 cached metrics (1d, 3d, 7d, 1m, 3m, 6m, 1y changes - both % and absolute)
+Automated daily cron job that downloads Pokemon card price data from [tcgcsv.com](https://tcgcsv.com) and updates a Supabase PostgreSQL database with:
+- ✅ Market prices for ~40,000 cards
+- ✅ Historical price data (stored as JSONB)
+- ✅ 14 cached metrics (1d, 3d, 7d, 1m, 3m, 6m, 1y price changes - both % and $)
+
+**100% free** using GitHub Actions (no credit card required).
 
 ## How It Works
 
-**Runs daily at 6PM EST (11PM UTC)** via GitHub Actions:
+Runs **daily at 6PM EST (11PM UTC)** via GitHub Actions:
 
-1. Downloads latest price data from `https://tcgcsv.com/archive/tcgplayer/prices-YYYY-MM-DD.ppmd.7z`
-2. Extracts using 7z on Ubuntu runner
-3. Processes categories 3 (English) and 85 (Japanese)
-4. Batch updates Supabase database via PostgreSQL RPC function
-5. Updates `market_price`, appends to `price_history` JSONB, recalculates all 14 metrics
-6. Cleans up temporary files (runner destroyed automatically)
+1. 📥 Downloads latest price data from tcgcsv.com
+2. 📦 Extracts archive using 7z
+3. 🔍 Processes categories 3 (English) and 85 (Japanese)
+4. 🚀 Batch updates via PostgreSQL RPC (1,000 products/batch)
+5. 📊 Updates market_price, price_history, and 14 metrics
+6. 🧹 Cleans up (runner destroyed automatically)
 
-## Triggers
+### Workflow Triggers
 
-The workflow runs:
-- ✅ **Daily**: 6PM EST (11PM UTC) via cron schedule
-- ✅ **On push**: When script or workflow changes are pushed to `main`
-- ✅ **Manual**: Via GitHub Actions "Run workflow" button
+- ⏰ **Scheduled**: Daily at 6PM EST
+- 🔄 **On push**: When script/workflow changes
+- 👆 **Manual**: Via GitHub Actions UI
 
-## Setup
+## Quick Start
 
-### 1. Prerequisites
-
-- GitHub account (free)
-- Supabase project with:
-  - `products` table
-  - `batch_update_price_history` RPC function (handles batch updates server-side)
-
-### 2. Clone and Push
+### 1. Fork This Repository
 
 ```bash
-git clone <your-fork>
-cd cards
-git push origin main
+git clone https://github.com/YOUR_USERNAME/PokemonPriceCron.git
+cd PokemonPriceCron
 ```
+
+### 2. Set Up Supabase
+
+1. Create free project at [supabase.com](https://supabase.com)
+2. Go to **SQL Editor**
+3. Run `supabase/migrations/001_initial_schema.sql`
+4. Run `supabase/migrations/002_batch_update_function.sql`
 
 ### 3. Add GitHub Secrets
 
-In your GitHub repo: **Settings → Secrets and variables → Actions**
+In your repo: **Settings → Secrets → Actions**
 
-Add these secrets:
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_SERVICE_ROLE_KEY` - Service role key (not anon key)
+Add:
+- `SUPABASE_URL` - Your project URL
+- `SUPABASE_SERVICE_ROLE_KEY` - Service role key (not anon)
 
-### 4. Enable GitHub Actions
+### 4. Enable & Test
 
-Go to **Actions** tab in your repo and enable workflows.
-
-### 5. Test
-
-**Option A**: Push changes to `scripts/daily-price-update.ts` (auto-triggers)
-**Option B**: Go to **Actions → Daily Price Update → Run workflow**
-**Option C**: Wait for 6PM EST
+1. Go to **Actions** tab → Enable workflows
+2. Push a change or click "Run workflow"
+3. Check logs for success
 
 ## Database Schema
 
-The `batch_update_price_history` RPC function expects:
+See `supabase/migrations/` for complete schema.
 
-```sql
--- Simplified example
-CREATE TABLE products (
-  product_id INTEGER PRIMARY KEY,
-  market_price NUMERIC,
-  price_history JSONB,  -- {"2024-02-08": 3.51, "2024-02-09": 3.48}
+**Key tables:**
+- `groups` - Card sets/expansions
+- `products` - Cards with price_history JSONB and 14 metrics
 
-  -- Cached metrics (14 total)
-  chg_1d_pct NUMERIC,
-  chg_1d_abs NUMERIC,
-  chg_3d_pct NUMERIC,
-  chg_3d_abs NUMERIC,
-  -- ... (7d, 1m, 3m, 6m, 1y)
-);
-
--- RPC function signature
-CREATE FUNCTION batch_update_price_history(
-  batch_data JSONB  -- [{"product_id": 123, "price": 4.99, "date": "2025-10-22"}, ...]
-) RETURNS void;
-```
-
-The RPC function should:
-1. Update `market_price` to latest price
-2. Append date/price to `price_history` JSONB
-3. Recalculate all 14 metrics based on updated history
-
-## Architecture
-
-### Why GitHub Actions?
-- ✅ **100% Free** (2,000 minutes/month for private repos, unlimited for public)
-- ✅ Fresh Ubuntu runner with 7z pre-installed
-- ✅ No persistent storage needed (download → process → upload → destroy)
-- ✅ Built-in scheduling and logging
-
-### Why RPC Function?
-- Server-side batch processing in PostgreSQL
-- Avoids 60-second timeout issues with large batches
-- Reduces network round-trips (1 call per 1,000 products vs 1,000 individual updates)
-- Automatic metric recalculation ensures consistency
-
-### Performance
-- **Batch size**: 1,000 products per RPC call
-- **Retry logic**: 3 attempts with 2-second delay for timeouts
-- **Processing time**: ~5-10 minutes for ~40,000 products
-- **Data transfer**: ~100MB download per day
-
-## Files
-
-```
-.github/workflows/daily-price-update.yml  # GitHub Actions workflow
-scripts/daily-price-update.ts             # Main cron script
-package.json                              # Dependencies
-.gitignore                                # Git ignore rules
-```
-
-## Cost
-
-**$0/month** - Completely free using GitHub Actions free tier
-
-## Monitoring
-
-View logs in **GitHub Actions** tab:
-1. Click on any workflow run
-2. Expand "Run daily price update" step
-3. Check for errors or timeouts
+**RPC function:**
+- `batch_update_price_history` - Batch updates with metric recalculation
 
 ## Troubleshooting
 
+**Error: supabaseUrl is required**
+→ Add GitHub secrets (see step 3)
+
 **Error: Download failed (404)**
-- Data for today not yet posted on tcgcsv.com
-- Archives typically posted around 8-10PM EST
-- Consider changing cron to 10PM EST (`0 3 * * *`)
+→ Data not posted yet, change cron to 10PM EST
 
-**Error: Statement timeout (code 57014)**
-- Batch taking >60 seconds on free tier
-- Retry logic handles this automatically
-- If persistent, consider upgrading Supabase tier
+**Error: Statement timeout**
+→ Script has retry logic, or reduce BATCH_SIZE
 
-**Error: Database connection failed**
-- Check `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` secrets
-- Verify Supabase project isn't paused (free tier auto-pauses after 1 week inactivity)
+See full README for complete documentation.
+
+## Cost
+
+**$0/month** - Completely free using GitHub Actions + Supabase free tiers
 
 ## License
 
