@@ -27,6 +27,23 @@ interface PriceUpdate {
   variant_key: string;
   date: string;
   price: number;
+  product_id?: number;
+  product_name?: string;
+  group_id?: number;
+}
+
+interface ProductDetails {
+  productId: number;
+  name: string;
+  groupId: number;
+}
+
+interface GroupProductsResponse {
+  success: boolean;
+  results: Array<{
+    productId: number;
+    name: string;
+  }>;
 }
 
 /**
@@ -196,6 +213,100 @@ function getGroupIdsForDate(date: string, categoryId: string): string[] {
 }
 
 /**
+ * Step 3a: Load blacklist from file
+ */
+function loadBlacklist(): Set<string> {
+  const blacklistPath = path.join(process.cwd(), 'product-blacklist.json');
+
+  if (!fs.existsSync(blacklistPath)) {
+    return new Set();
+  }
+
+  try {
+    const content = fs.readFileSync(blacklistPath, 'utf-8');
+    const data = JSON.parse(content);
+    return new Set(data.blacklistedProducts || []);
+  } catch (error) {
+    console.error('⚠️  Error loading blacklist:', error);
+    return new Set();
+  }
+}
+
+/**
+ * Step 3b: Save blacklist to file
+ */
+function saveBlacklist(blacklist: Set<string>): void {
+  const blacklistPath = path.join(process.cwd(), 'product-blacklist.json');
+
+  try {
+    const data = {
+      blacklistedProducts: Array.from(blacklist),
+      lastUpdated: new Date().toISOString()
+    };
+    fs.writeFileSync(blacklistPath, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('⚠️  Error saving blacklist:', error);
+  }
+}
+
+/**
+ * Step 3c: Fetch product details from tcgcsv.com API
+ */
+async function fetchProductDetails(
+  categoryId: string,
+  groupId: string,
+  productId: number
+): Promise<ProductDetails | null> {
+  const url = `https://tcgcsv.com/tcgplayer/${categoryId}/${groupId}/products`;
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.error(`   ⚠️  Failed to fetch products for group ${groupId}: ${response.status}`);
+      return null;
+    }
+
+    const data: GroupProductsResponse = await response.json();
+
+    if (!data.success || !data.results) {
+      console.error(`   ⚠️  Invalid response from API for group ${groupId}`);
+      return null;
+    }
+
+    // Find the product in the results
+    const product = data.results.find(p => p.productId === productId);
+
+    if (!product) {
+      console.error(`   ⚠️  Product ${productId} not found in group ${groupId}`);
+      return null;
+    }
+
+    return {
+      productId: product.productId,
+      name: product.name,
+      groupId: parseInt(groupId)
+    };
+  } catch (error) {
+    console.error(`   ⚠️  Error fetching product details for ${productId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Step 3d: Check if product should be blacklisted
+ */
+function shouldBlacklist(productName: string): boolean {
+  const blacklistPatterns = [
+    'Code Card',
+    'code card',
+    'CODE CARD'
+  ];
+
+  return blacklistPatterns.some(pattern => productName.includes(pattern));
+}
+
+/**
  * Step 4: Generate variant key
  */
 function generateVariantKey(productId: number, finish: string | null): string {
@@ -208,7 +319,31 @@ function generateVariantKey(productId: number, finish: string | null): string {
 async function updatePriceHistory(date: string): Promise<void> {
   console.log(`\n┌─ Processing ${date}`);
 
+  // Load blacklist
+  const blacklist = loadBlacklist();
+  const newBlacklistedProducts = new Set<string>();
+  console.log(`   🚫 Loaded blacklist: ${blacklist.size} products`);
+
   const allUpdates: PriceUpdate[] = [];
+
+  // Get existing products from database
+  console.log(`   🔍 Fetching existing products from database...`);
+  const { data: existingProducts, error: fetchError } = await supabase
+    .from('products')
+    .select('variant_key');
+
+  if (fetchError) {
+    console.error(`   ❌ Error fetching existing products:`, fetchError);
+    throw new Error('Failed to fetch existing products');
+  }
+
+  const existingVariantKeys = new Set(
+    existingProducts?.map(p => p.variant_key) || []
+  );
+  console.log(`   ✅ Found ${existingVariantKeys.size.toLocaleString()} existing products`);
+
+  // Track new products that need lookup
+  const newProductsMap = new Map<string, { categoryId: string; groupId: string; productId: number; finish: string }>();
 
   // Collect all price updates for this date
   for (const categoryId of ['3', '85']) {
@@ -220,6 +355,22 @@ async function updatePriceHistory(date: string): Promise<void> {
 
       for (const entry of priceEntries) {
         const variantKey = generateVariantKey(entry.productId, entry.subTypeName);
+
+        // Check if product is blacklisted
+        if (blacklist.has(variantKey)) {
+          continue; // Skip blacklisted products
+        }
+
+        // If product doesn't exist in DB and not in blacklist, mark for lookup
+        if (!existingVariantKeys.has(variantKey)) {
+          newProductsMap.set(variantKey, {
+            categoryId,
+            groupId,
+            productId: entry.productId,
+            finish: entry.subTypeName || 'Normal'
+          });
+        }
+
         allUpdates.push({
           variant_key: variantKey,
           date: date,
@@ -230,6 +381,114 @@ async function updatePriceHistory(date: string): Promise<void> {
   }
 
   console.log(`   📊 Collected ${allUpdates.length.toLocaleString()} price updates`);
+  console.log(`   🆕 Detected ${newProductsMap.size.toLocaleString()} new products`);
+
+  // Fetch details for new products
+  if (newProductsMap.size > 0) {
+    console.log(`   🔎 Fetching details for new products...`);
+
+    // Group by categoryId + groupId to minimize API calls
+    const groupedByCategory = new Map<string, Set<number>>();
+
+    for (const [variantKey, info] of newProductsMap.entries()) {
+      const key = `${info.categoryId}:${info.groupId}`;
+      if (!groupedByCategory.has(key)) {
+        groupedByCategory.set(key, new Set());
+      }
+      groupedByCategory.get(key)!.add(info.productId);
+    }
+
+    let lookupCount = 0;
+    let blacklistedCount = 0;
+    let validCount = 0;
+
+    for (const [key, productIds] of groupedByCategory.entries()) {
+      const [categoryId, groupId] = key.split(':');
+
+      console.log(`   🌐 Fetching group ${groupId} (category ${categoryId}) - ${productIds.size} products...`);
+
+      // Fetch all products for this group
+      const url = `https://tcgcsv.com/tcgplayer/${categoryId}/${groupId}/products`;
+
+      try {
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          console.error(`   ⚠️  Failed to fetch products for group ${groupId}: ${response.status}`);
+          continue;
+        }
+
+        const data: GroupProductsResponse = await response.json();
+
+        if (!data.success || !data.results) {
+          console.error(`   ⚠️  Invalid response from API for group ${groupId}`);
+          continue;
+        }
+
+        // Check each product we're looking for
+        for (const productId of productIds) {
+          const product = data.results.find(p => p.productId === productId);
+
+          if (!product) {
+            console.error(`   ⚠️  Product ${productId} not found in group ${groupId}`);
+            continue;
+          }
+
+          lookupCount++;
+
+          // Check if product should be blacklisted
+          if (shouldBlacklist(product.name)) {
+            console.log(`   🚫 Blacklisting: ${product.name} (${productId})`);
+
+            // Find all variant keys for this product
+            for (const [variantKey, info] of newProductsMap.entries()) {
+              if (info.productId === productId && info.categoryId === categoryId && info.groupId === groupId) {
+                newBlacklistedProducts.add(variantKey);
+
+                // Remove from updates
+                const updateIndex = allUpdates.findIndex(u => u.variant_key === variantKey);
+                if (updateIndex !== -1) {
+                  allUpdates.splice(updateIndex, 1);
+                }
+              }
+            }
+
+            blacklistedCount++;
+            continue;
+          }
+
+          // Add product details to all relevant updates
+          for (const [variantKey, info] of newProductsMap.entries()) {
+            if (info.productId === productId && info.categoryId === categoryId && info.groupId === groupId) {
+              const updateIndex = allUpdates.findIndex(u => u.variant_key === variantKey);
+              if (updateIndex !== -1) {
+                allUpdates[updateIndex].product_id = productId;
+                allUpdates[updateIndex].product_name = product.name;
+                allUpdates[updateIndex].group_id = parseInt(groupId);
+                validCount++;
+              }
+            }
+          }
+        }
+
+        // Add small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`   ⚠️  Error fetching products for group ${groupId}:`, error);
+      }
+    }
+
+    console.log(`   ✅ Looked up ${lookupCount} products`);
+    console.log(`   ✅ Valid new products: ${validCount}`);
+    console.log(`   🚫 Blacklisted: ${blacklistedCount} products`);
+
+    // Save updated blacklist
+    if (newBlacklistedProducts.size > 0) {
+      const updatedBlacklist = new Set([...blacklist, ...newBlacklistedProducts]);
+      saveBlacklist(updatedBlacklist);
+      console.log(`   💾 Saved ${updatedBlacklist.size} products to blacklist`);
+    }
+  }
 
   if (allUpdates.length === 0) {
     console.log(`   ⏭️  No updates for this date`);
@@ -238,6 +497,7 @@ async function updatePriceHistory(date: string): Promise<void> {
 
   // Send updates to PostgreSQL in batches
   let totalUpdated = 0;
+  let totalInserted = 0;
   let totalSkipped = 0;
   let totalErrors = 0;
 
@@ -276,6 +536,7 @@ async function updatePriceHistory(date: string): Promise<void> {
         if (data && data.length > 0) {
           const result = data[0];
           totalUpdated += result.updated_count || 0;
+          totalInserted += result.inserted_count || 0;
           totalSkipped += result.skipped_count || 0;
           totalErrors += result.error_count || 0;
         }
@@ -294,7 +555,7 @@ async function updatePriceHistory(date: string): Promise<void> {
     }
   }
 
-  console.log(`   ✅ Complete: ${totalUpdated} updated, ${totalSkipped} skipped, ${totalErrors} errors`);
+  console.log(`   ✅ Complete: ${totalUpdated} updated, ${totalInserted} inserted, ${totalSkipped} skipped, ${totalErrors} errors`);
 }
 
 /**
