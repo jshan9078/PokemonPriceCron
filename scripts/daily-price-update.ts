@@ -41,6 +41,7 @@ interface BatchItem {
   image_url?: string;
   url?: string;
   clean_name?: string;
+  finish?: string;
 }
 
 async function tryDownloadForDate(dateStr: string): Promise<boolean> {
@@ -131,7 +132,8 @@ async function updatePriceHistory(today: string) {
           date: today,
           price: entry.marketPrice!,
           low_price: entry.lowPrice,
-          high_price: entry.highPrice
+          high_price: entry.highPrice,
+          finish: entry.subTypeName || 'Normal'
         });
       }
     }
@@ -157,7 +159,7 @@ async function updatePriceHistory(today: string) {
       }
 
       const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
+      if (!contentType || (!contentType.includes('application/json') && !contentType.includes('text/json'))) {
         console.error(`❌ Invalid content type for ${url}: ${contentType}`);
         const text = await response.text();
         console.error(`Response preview: ${text.substring(0, 200)}`);
