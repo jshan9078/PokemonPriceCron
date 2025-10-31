@@ -137,33 +137,86 @@ async function updatePriceHistory(today: string) {
     }
   }
 
+  console.log(`📊 Found ${newProducts.size} new products to fetch metadata for`);
+
+  let processedNew = 0;
   for (const [variantKey, meta] of newProducts.entries()) {
+    processedNew++;
+    if (processedNew % 10 === 0) {
+      console.log(`  Fetching metadata: ${processedNew}/${newProducts.size}`);
+    }
+
     const url = `https://tcgcsv.com/tcgplayer/${meta.categoryId}/${meta.groupId}/products`;
-    const json = await fetch(url).then(r => r.json());
 
-    const product = json.results.find((p: any) => p.productId === meta.productId);
-    if (!product) continue;
+    try {
+      const response = await fetch(url);
 
-    const rarity = product.extendedData?.find((x: any) => x.name === 'Rarity')?.value ?? null;
-    const number = product.extendedData?.find((x: any) => x.name === 'Number')?.value ?? null;
+      if (!response.ok) {
+        console.error(`❌ API request failed for ${url}: ${response.status} ${response.statusText}`);
+        continue;
+      }
 
-    for (const row of batches.filter(b => b.variant_key === variantKey)) {
-      row.product_id = product.productId;
-      row.group_id = Number(meta.groupId);
-      row.product_name = product.name;
-      row.rarity = rarity;
-      row.number = number;
-      row.image_url = product.imageUrl ?? null;
-      row.url = product.url ?? null;
-      row.clean_name = product.cleanName ?? product.name ?? null;
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error(`❌ Invalid content type for ${url}: ${contentType}`);
+        const text = await response.text();
+        console.error(`Response preview: ${text.substring(0, 200)}`);
+        continue;
+      }
+
+      const json = await response.json();
+
+      if (!json.results || !Array.isArray(json.results)) {
+        console.error(`❌ Invalid JSON structure for ${url}`);
+        continue;
+      }
+
+      const product = json.results.find((p: any) => p.productId === meta.productId);
+      if (!product) {
+        console.warn(`⚠️  Product ${meta.productId} not found in group ${meta.groupId}`);
+        continue;
+      }
+
+      const rarity = product.extendedData?.find((x: any) => x.name === 'Rarity')?.value ?? null;
+      const number = product.extendedData?.find((x: any) => x.name === 'Number')?.value ?? null;
+
+      for (const row of batches.filter(b => b.variant_key === variantKey)) {
+        row.product_id = product.productId;
+        row.group_id = Number(meta.groupId);
+        row.product_name = product.name;
+        row.rarity = rarity;
+        row.number = number;
+        row.image_url = product.imageUrl ?? null;
+        row.url = product.url ?? null;
+        row.clean_name = product.cleanName ?? product.name ?? null;
+      }
+    } catch (error) {
+      console.error(`❌ Error fetching metadata for ${variantKey} from ${url}:`, error);
+      // Continue processing other products
     }
   }
 
+  console.log(`✅ Finished fetching metadata for new products`);
+  console.log(`💾 Updating database with ${batches.length} price records in batches of ${BATCH_SIZE}...`);
+
   for (let i = 0; i < batches.length; i += BATCH_SIZE) {
-    await supabase.rpc('batch_update_price_history', {
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(batches.length / BATCH_SIZE);
+    console.log(`  Processing batch ${batchNum}/${totalBatches}...`);
+
+    const { data, error } = await supabase.rpc('batch_update_price_history', {
       batch_data: batches.slice(i, i + BATCH_SIZE)
     });
+
+    if (error) {
+      console.error(`❌ Error updating batch ${batchNum}:`, error);
+    } else if (data && data.length > 0) {
+      const result = data[0];
+      console.log(`    ✅ Updated: ${result.updated_count}, Inserted: ${result.inserted_count}, Skipped: ${result.skipped_count}, Errors: ${result.error_count}`);
+    }
   }
+
+  console.log(`✅ Database update complete!`);
 }
 
 async function main() {
