@@ -43,22 +43,54 @@ interface BatchItem {
   clean_name?: string;
 }
 
+async function tryDownloadForDate(dateStr: string): Promise<boolean> {
+  const url = `${DOWNLOAD_BASE_URL}/prices-${dateStr}.ppmd.7z`;
+  const archivePath = path.join(TEMP_DOWNLOAD_DIR, `prices-${dateStr}.ppmd.7z`);
+
+  console.log(`📥 Attempting download: ${url}`);
+
+  try {
+    execSync(`curl -f -L -o "${archivePath}" "${url}"`, { stdio: 'inherit' });
+
+    const stats = fs.statSync(archivePath);
+    if (stats.size < 1000000) {
+      console.error(`❌ File too small (${stats.size} bytes)`);
+      console.error(`File content preview:`);
+      const content = fs.readFileSync(archivePath, 'utf-8');
+      console.error(content.substring(0, 500));
+      return false;
+    }
+
+    console.log(`✅ Downloaded ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`📦 Extracting archive...`);
+
+    execSync(`"${SEVEN_ZIP_PATH}" x "${archivePath}" -o"${DATA_DIR}" -y`, { stdio: 'inherit' });
+    return true;
+  } catch (error) {
+    console.error(`❌ Download failed for ${dateStr}`);
+    console.error(error);
+    return false;
+  }
+}
+
 async function downloadAndExtract(): Promise<string> {
   const now = new Date();
   const estDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+
+  fs.mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
 
   const today = `${estDate.getFullYear()}-${String(estDate.getMonth() + 1).padStart(2, '0')}-${String(
     estDate.getDate()
   ).padStart(2, '0')}`;
 
-  const url = `${DOWNLOAD_BASE_URL}/prices-${today}.ppmd.7z`;
-  const archivePath = path.join(TEMP_DOWNLOAD_DIR, `prices-${today}.ppmd.7z`);
+  console.log(`📅 Current EST date: ${today}`);
+  console.log(`📅 System time: ${now.toISOString()}`);
 
-  fs.mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
-  execSync(`curl -L -o "${archivePath}" "${url}"`, { stdio: 'inherit' });
-  execSync(`"${SEVEN_ZIP_PATH}" x "${archivePath}" -o"${DATA_DIR}" -y`, { stdio: 'inherit' });
+  if (await tryDownloadForDate(today)) {
+    return today;
+  }
 
-  return today;
+  throw new Error(`Archive not available for ${today}. Check if the date is correct and the file exists at: ${DOWNLOAD_BASE_URL}/prices-${today}.ppmd.7z`);
 }
 
 function readPriceJson(date: string, categoryId: string, groupId: string): PriceEntry[] {
