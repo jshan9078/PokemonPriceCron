@@ -107,8 +107,34 @@ function variant(productId: number, finish?: string) {
 }
 
 async function updatePriceHistory(today: string) {
-  const { data: existing } = await supabase.from('products').select('variant_key');
-  const existingKeys = new Set(existing?.map(p => p.variant_key));
+  console.log('📊 Loading existing products from database...');
+  let allProducts: { variant_key: string }[] = [];
+  let page = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('products')
+      .select('variant_key')
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (error) {
+      console.error('❌ Error fetching existing products:', error);
+      throw error;
+    }
+
+    if (!data || data.length === 0) break;
+
+    allProducts = allProducts.concat(data);
+    page++;
+
+    if (page % 10 === 0) {
+      console.log(`  Loaded ${allProducts.length} products so far...`);
+    }
+  }
+
+  const existingKeys = new Set(allProducts.map(p => p.variant_key));
+  console.log(`✅ Loaded ${existingKeys.size} existing products from database`);
 
   const batches: BatchItem[] = [];
   const newProducts = new Map<string, { categoryId: string; groupId: string; productId: number }>();
