@@ -29,6 +29,19 @@ const existingKeys = new Set(existing?.map(p => p.variant_key));
 - Fetches all existing `variant_key` values from database
 - Creates a Set for fast lookup
 
+#### 2.1a: Fetch Group Metadata ⭐ NEW
+```typescript
+const [englishGroups, japaneseGroups] = await Promise.all([
+  fetchGroupsForCategory('3'),
+  fetchGroupsForCategory('85')
+]);
+```
+- Fetches ALL groups for English (category 3) and Japanese (category 85)
+- API: `https://tcgcsv.com/tcgplayer/{categoryId}/groups`
+- Caches ~648 groups total (210 English + 438 Japanese)
+- Enables automatic group creation for new Pokemon sets
+- See [GROUP_HANDLING_DOCUMENTATION.md](GROUP_HANDLING_DOCUMENTATION.md) for details
+
 #### 2.2: Read Price Data from Files
 For each category (English=3, Japanese=85):
   - Reads `DATA_DIR/YYYY-MM-DD/categoryId/groupId/prices` files
@@ -52,6 +65,7 @@ For each price entry:
 - Creates `variant_key` = `${productId}:${subTypeName}` (e.g., "544444:Holofoil")
 - Checks if product exists in database
 - If NEW product: adds to `newProducts` map for metadata fetch
+- **NEW**: Looks up group metadata from cache and attaches to batch item
 - Adds to batches array:
   ```typescript
   {
@@ -59,11 +73,20 @@ For each price entry:
     date: "2025-10-30",
     price: 10.50,           // ← ONLY marketPrice (numeric)
     low_price: 9.00,
-    high_price: 12.00
+    high_price: 12.00,
+    finish: "Holofoil",
+    group_id: 23651,
+    // ⭐ NEW: Group metadata fields
+    group_name: "SV08: Surging Sparks",
+    group_abbreviation: "SSP",
+    group_published_on: "2024-11-08T00:00:00",
+    group_modified_on: "2025-11-04T00:51:09.793",
+    group_is_supplemental: false,
+    group_category_id: 3
   }
   ```
 
-**IMPORTANT**: At line 132, the cron passes `price: entry.marketPrice!` - this is a NUMERIC value, not an object.
+**IMPORTANT**: The cron passes `price: entry.marketPrice!` - this is a NUMERIC value, not an object.
 
 ---
 
@@ -114,13 +137,13 @@ Each batch item contains:
 
 ## SQL Function: `batch_update_price_history`
 
-**Current Migration**: [004_add_upsert_capability.sql](supabase/migrations/004_add_upsert_capability.sql)
+**Current Migration**: [008_add_group_upsert.sql](supabase/migrations/008_add_group_upsert.sql)
 
 ### What the SQL Function Does:
 
 #### For Each Item in Batch:
 
-1. **Extract Data** (lines 55-64)
+1. **Extract Data**
    ```sql
    v_variant_key := item->>'variant_key';
    v_date := item->>'date';
@@ -128,7 +151,30 @@ Each batch item contains:
    v_product_id := (item->>'product_id')::INTEGER;
    v_product_name := item->>'product_name';
    v_group_id := (item->>'group_id')::INTEGER;
+   -- ⭐ NEW: Extract group metadata
+   v_group_name := item->>'group_name';
+   v_group_abbreviation := item->>'group_abbreviation';
+   v_group_published_on := (item->>'group_published_on')::TIMESTAMPTZ;
+   v_group_modified_on := (item->>'group_modified_on')::TIMESTAMPTZ;
+   v_group_is_supplemental := (item->>'group_is_supplemental')::BOOLEAN;
+   v_group_category_id := (item->>'group_category_id')::INTEGER;
    ```
+
+1a. **⭐ NEW: Upsert Group** (BEFORE product insertion)
+   ```sql
+   IF v_group_id IS NOT NULL AND v_group_name IS NOT NULL THEN
+     INSERT INTO groups (id, name, abbreviation, category_id, ...)
+     VALUES (v_group_id, v_group_name, ...)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       modified_on = EXCLUDED.modified_on,
+       last_synced_at = now();
+   END IF;
+   ```
+   - Ensures group exists BEFORE attempting product insert
+   - Updates existing groups with latest metadata
+   - Prevents foreign key violations
+   - See [GROUP_HANDLING_DOCUMENTATION.md](GROUP_HANDLING_DOCUMENTATION.md)
 
 2. **Check if Product Exists** (line 73)
    ```sql

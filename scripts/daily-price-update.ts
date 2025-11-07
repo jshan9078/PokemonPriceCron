@@ -27,6 +27,16 @@ interface PriceEntry {
   subTypeName: string;
 }
 
+interface GroupData {
+  groupId: number;
+  name: string;
+  abbreviation: string | null;
+  isSupplemental: boolean;
+  publishedOn: string | null;
+  modifiedOn: string | null;
+  categoryId: number;
+}
+
 interface BatchItem {
   variant_key: string;
   date: string;
@@ -106,6 +116,46 @@ function variant(productId: number, finish?: string) {
   return `${productId}:${finish || 'Normal'}`;
 }
 
+async function fetchGroupsForCategory(categoryId: string): Promise<Map<number, GroupData>> {
+  const url = `https://tcgcsv.com/tcgplayer/${categoryId}/groups`;
+  console.log(`📥 Fetching groups for category ${categoryId}...`);
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.error(`❌ Failed to fetch groups: ${response.status} ${response.statusText}`);
+      return new Map();
+    }
+
+    const json = await response.json();
+
+    if (!json.results || !Array.isArray(json.results)) {
+      console.error(`❌ Invalid groups response structure`);
+      return new Map();
+    }
+
+    const groupMap = new Map<number, GroupData>();
+    for (const group of json.results) {
+      groupMap.set(group.groupId, {
+        groupId: group.groupId,
+        name: group.name,
+        abbreviation: group.abbreviation || null,
+        isSupplemental: group.isSupplemental || false,
+        publishedOn: group.publishedOn || null,
+        modifiedOn: group.modifiedOn || null,
+        categoryId: group.categoryId
+      });
+    }
+
+    console.log(`✅ Fetched ${groupMap.size} groups for category ${categoryId}`);
+    return groupMap;
+  } catch (error) {
+    console.error(`❌ Error fetching groups for category ${categoryId}:`, error);
+    return new Map();
+  }
+}
+
 async function updatePriceHistory(today: string) {
   console.log('📊 Loading existing products from database...');
   let allProducts: { variant_key: string }[] = [];
@@ -136,6 +186,76 @@ async function updatePriceHistory(today: string) {
   const existingKeys = new Set(allProducts.map(p => p.variant_key));
   console.log(`✅ Loaded ${existingKeys.size} existing products from database`);
 
+  // Fetch group metadata for both categories
+  console.log('📥 Fetching group metadata from TCGPlayer...');
+  const [englishGroups, japaneseGroups] = await Promise.all([
+    fetchGroupsForCategory('3'),
+    fetchGroupsForCategory('85')
+  ]);
+
+  const allGroups = new Map<string, GroupData>();
+  for (const [groupId, group] of englishGroups) {
+    allGroups.set(`3:${groupId}`, group);
+  }
+  for (const [groupId, group] of japaneseGroups) {
+    allGroups.set(`85:${groupId}`, group);
+  }
+
+  console.log(`✅ Loaded ${allGroups.size} total groups from TCGPlayer`);
+
+  // Identify unique groups present in price data
+  console.log('🔍 Identifying groups in price data...');
+  const groupsInPriceData = new Set<string>();
+
+  for (const categoryId of ['3', '85']) {
+    const categoryPath = path.join(DATA_DIR, today, categoryId);
+    if (!fs.existsSync(categoryPath)) continue;
+
+    for (const groupId of fs.readdirSync(categoryPath)) {
+      groupsInPriceData.add(`${categoryId}:${groupId}`);
+    }
+  }
+
+  console.log(`📊 Found ${groupsInPriceData.size} unique groups in price data`);
+
+  // Upsert all groups ONCE before processing products
+  console.log('💾 Upserting groups to database...');
+  let groupsUpserted = 0;
+  let groupsSkipped = 0;
+
+  for (const groupKey of groupsInPriceData) {
+    const groupData = allGroups.get(groupKey);
+
+    if (!groupData) {
+      console.warn(`⚠️  No metadata found for group ${groupKey}, skipping`);
+      groupsSkipped++;
+      continue;
+    }
+
+    const { error } = await supabase
+      .from('groups')
+      .upsert({
+        id: groupData.groupId,
+        name: groupData.name,
+        abbreviation: groupData.abbreviation,
+        category_id: groupData.categoryId,
+        published_on: groupData.publishedOn,
+        modified_on: groupData.modifiedOn,
+        is_supplemental: groupData.isSupplemental,
+        last_synced_at: new Date().toISOString()
+      }, {
+        onConflict: 'id'
+      });
+
+    if (error) {
+      console.error(`❌ Error upserting group ${groupData.groupId}:`, error);
+    } else {
+      groupsUpserted++;
+    }
+  }
+
+  console.log(`✅ Upserted ${groupsUpserted} groups (${groupsSkipped} skipped)`);
+
   const batches: BatchItem[] = [];
   const newProducts = new Map<string, { categoryId: string; groupId: string; productId: number }>();
 
@@ -159,7 +279,8 @@ async function updatePriceHistory(today: string) {
           price: entry.marketPrice!,
           low_price: entry.lowPrice,
           high_price: entry.highPrice,
-          finish: entry.subTypeName || 'Normal'
+          finish: entry.subTypeName || 'Normal',
+          group_id: Number(groupId)
         });
       }
     }
