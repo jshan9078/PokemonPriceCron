@@ -369,8 +369,25 @@ async function updatePriceHistory(today: string) {
 }
 
 async function main() {
+  const scriptStart = new Date(); // Capture start time for stale data cleanup
   const today = await downloadAndExtract();
   await updatePriceHistory(today);
+
+  // Clean up stale metrics for products that weren't updated in this run
+  console.log('🔄 Recalculating stale metrics...');
+  const { error: cleanupError, data: cleanupData } = await supabase.rpc('recalculate_stale_metrics', {
+    cutoff_time: scriptStart.toISOString()
+  });
+
+  if (cleanupError) {
+    console.error('❌ Error recalculating stale metrics:', cleanupError);
+  } else {
+    // Check if cleanupData is an array (if returns table) or number (if returns scalar)
+    // The function RETURNS TABLE(updated_count INTEGER)
+    const count = cleanupData && cleanupData[0] ? cleanupData[0].updated_count : 0;
+    console.log(`✅ Recalculated metrics for ${count} stale products`);
+  }
+
   console.log(`✅ Completed daily price update for ${today}`);
 }
 
