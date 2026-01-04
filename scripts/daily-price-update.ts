@@ -84,11 +84,20 @@ async function tryDownloadForDate(dateStr: string): Promise<boolean> {
   }
 }
 
-async function downloadAndExtract(): Promise<string> {
+async function downloadAndExtract(dateOverride?: string): Promise<string> {
+  // Ensure directory exists first
+  fs.mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
+
+  if (dateOverride) {
+    console.log(`📅 Manual override: Using date ${dateOverride}`);
+    if (await tryDownloadForDate(dateOverride)) {
+      return dateOverride;
+    }
+    throw new Error(`Archive not available for ${dateOverride}. Check if the date is correct and the file exists at: ${DOWNLOAD_BASE_URL}/prices-${dateOverride}.ppmd.7z`);
+  }
+
   const now = new Date();
   const estDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-
-  fs.mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
 
   const today = `${estDate.getFullYear()}-${String(estDate.getMonth() + 1).padStart(2, '0')}-${String(
     estDate.getDate()
@@ -370,7 +379,7 @@ async function updatePriceHistory(today: string) {
 
 async function main() {
   const scriptStart = new Date(); // Capture start time for stale data cleanup
-  const today = await downloadAndExtract();
+  const today = await downloadAndExtract(process.argv[2]);
   await updatePriceHistory(today);
 
   // Clean up stale metrics for products that weren't updated in this run
