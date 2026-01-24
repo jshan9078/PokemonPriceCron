@@ -62,11 +62,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Run the daily price update script
       - name: Run daily price update
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TCGPLAYER_CLIENT_ID: ${{ secrets.TCGPLAYER_CLIENT_ID }}
+          TCGPLAYER_CLIENT_SECRET: ${{ secrets.TCGPLAYER_CLIENT_SECRET }}
           DATA_DIR: /tmp/tcg-data
           TEMP_DOWNLOAD_DIR: /tmp/tcg-price-data
           SEVEN_ZIP_PATH: /usr/bin/7z

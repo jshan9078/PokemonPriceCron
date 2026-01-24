@@ -17,6 +17,12 @@ const TEMP_DOWNLOAD_DIR = process.env.TEMP_DOWNLOAD_DIR || '/tmp/tcg-price-data'
 const DOWNLOAD_BASE_URL = 'https://tcgcsv.com/archive/tcgplayer';
 const SEVEN_ZIP_PATH = process.env.SEVEN_ZIP_PATH || '/Users/jonathan/Downloads/7z2501-mac/7zz';
 
+// TCGPlayer API Configuration
+const TCGPLAYER_API_BASE = 'https://api.tcgplayer.com';
+const TCGPLAYER_CLIENT_ID = process.env.TCGPLAYER_CLIENT_ID;
+const TCGPLAYER_CLIENT_SECRET = process.env.TCGPLAYER_CLIENT_SECRET;
+const UNOPENED_CONDITION_ID = 6;
+
 const BATCH_SIZE = 1000;
 
 interface PriceEntry {
@@ -52,6 +58,83 @@ interface BatchItem {
   url?: string;
   clean_name?: string;
   finish?: string;
+  sealed?: boolean;
+}
+
+// TCGPlayer API Types
+interface TcgPlayerSku {
+  skuId: number;
+  productId: number;
+  languageId: number;
+  printingId: number;
+  conditionId: number;
+}
+
+// TCGPlayer OAuth Token Management
+let tcgAccessToken: string | null = null;
+let tcgTokenExpiry = 0;
+
+async function getTcgPlayerAccessToken(): Promise<string | null> {
+  if (!TCGPLAYER_CLIENT_ID || !TCGPLAYER_CLIENT_SECRET) {
+    console.warn('⚠️ TCGPlayer credentials not configured, skipping sealed detection');
+    return null;
+  }
+
+  const now = Date.now();
+  if (tcgAccessToken && tcgTokenExpiry > now + 300000) {
+    return tcgAccessToken;
+  }
+
+  console.log('🔑 Fetching TCGPlayer access token...');
+
+  try {
+    const response = await fetch(`${TCGPLAYER_API_BASE}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=client_credentials&client_id=${TCGPLAYER_CLIENT_ID}&client_secret=${TCGPLAYER_CLIENT_SECRET}`,
+    });
+
+    if (!response.ok) {
+      console.error(`❌ TCGPlayer auth failed: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    tcgAccessToken = data.access_token;
+    tcgTokenExpiry = now + data.expires_in * 1000;
+    return tcgAccessToken;
+  } catch (error) {
+    console.error('❌ TCGPlayer auth error:', error);
+    return null;
+  }
+}
+
+async function getProductSkus(productId: number): Promise<TcgPlayerSku[]> {
+  const token = await getTcgPlayerAccessToken();
+  if (!token) return [];
+
+  try {
+    const response = await fetch(`${TCGPLAYER_API_BASE}/catalog/products/${productId}/skus`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    return data.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function isProductSealed(skus: TcgPlayerSku[]): boolean {
+  if (skus.length === 0) return false;
+  return skus.every(sku => sku.conditionId === UNOPENED_CONDITION_ID);
 }
 
 async function tryDownloadForDate(dateStr: string): Promise<boolean> {
@@ -347,6 +430,16 @@ async function updatePriceHistory(today: string) {
         row.image_url = product.imageUrl ?? null;
         row.url = product.url ?? null;
         row.clean_name = product.cleanName ?? product.name ?? null;
+      }
+
+      // Check if product is sealed (all SKUs have conditionId=6/Unopened)
+      const skus = await getProductSkus(product.productId);
+      const sealed = isProductSealed(skus);
+      if (sealed) {
+        console.log(`  📦 Product ${product.productId} is SEALED`);
+      }
+      for (const row of batches.filter(b => b.variant_key === variantKey)) {
+        row.sealed = sealed;
       }
     } catch (error) {
       console.error(`❌ Error fetching metadata for ${variantKey} from ${url}:`, error);
