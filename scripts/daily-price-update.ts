@@ -193,7 +193,21 @@ async function downloadAndExtract(dateOverride?: string): Promise<string> {
     return today;
   }
 
-  throw new Error(`Archive not available for ${today}. Check if the date is correct and the file exists at: ${DOWNLOAD_BASE_URL}/prices-${today}.ppmd.7z`);
+  console.warn(`⚠️ Archive not available for today (${today}). Falling back to previous day...`);
+
+  // Fallback to yesterday
+  estDate.setDate(estDate.getDate() - 1);
+  const yesterday = `${estDate.getFullYear()}-${String(estDate.getMonth() + 1).padStart(2, '0')}-${String(
+    estDate.getDate()
+  ).padStart(2, '0')}`;
+
+  console.log(`📅 Trying previous day: ${yesterday}`);
+
+  if (await tryDownloadForDate(yesterday)) {
+    return yesterday;
+  }
+
+  throw new Error(`Archive not available for ${today} OR ${yesterday}. Check TCGPlayer options.`);
 }
 
 function readPriceJson(date: string, categoryId: string, groupId: string): PriceEntry[] {
