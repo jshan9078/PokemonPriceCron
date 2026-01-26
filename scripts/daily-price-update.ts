@@ -264,14 +264,14 @@ async function fetchGroupsForCategory(categoryId: string): Promise<Map<number, G
 
 async function updatePriceHistory(today: string) {
   console.log('📊 Loading existing products from database...');
-  let allProducts: { variant_key: string }[] = [];
+  let allProducts: { variant_key: string; product_id: number }[] = [];
   let page = 0;
   const pageSize = 1000;
 
   while (true) {
     const { data, error } = await supabase
       .from('products')
-      .select('variant_key')
+      .select('variant_key, product_id')
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     if (error) {
@@ -290,6 +290,16 @@ async function updatePriceHistory(today: string) {
   }
 
   const existingKeys = new Set(allProducts.map(p => p.variant_key));
+
+  // Create a map of Product ID -> Set of Variant Keys
+  const productIdToKeys = new Map<number, Set<string>>();
+  for (const p of allProducts) {
+    if (!productIdToKeys.has(p.product_id)) {
+      productIdToKeys.set(p.product_id, new Set());
+    }
+    productIdToKeys.get(p.product_id)!.add(p.variant_key);
+  }
+
   console.log(`✅ Loaded ${existingKeys.size} existing products from database`);
 
   // Fetch group metadata for both categories
@@ -377,6 +387,19 @@ async function updatePriceHistory(today: string) {
 
         if (!existingKeys.has(key) && !newProducts.has(key)) {
           newProducts.set(key, { categoryId, groupId, productId: entry.productId });
+
+          // Diagnostic Logging for the first 20 "new" products
+          if (newProducts.size <= 20) {
+            const existingVariants = productIdToKeys.get(entry.productId);
+            if (existingVariants) {
+              console.warn(`🚨 KEY MISMATCH for Product ${entry.productId}:`);
+              console.warn(`   CSV Key: '${key}'`);
+              console.warn(`   DB Keys: ${Array.from(existingVariants).join(', ')}`);
+              console.warn(`   (This product exists but the key changed, likely TCGPlayer data drift)`);
+            } else {
+              console.log(`✨ TRULY NEW Product Detected: ${entry.productId} (${key})`);
+            }
+          }
         }
 
         batches.push({
