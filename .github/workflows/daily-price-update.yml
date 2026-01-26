@@ -44,6 +44,9 @@ jobs:
           restore-keys: |
             product-blacklist-
 
+      - name: Show blacklist contents
+        run: cat product-blacklist.json
+
       # Install p7zip for 7z extraction
       - name: Install 7zip
         run: |
