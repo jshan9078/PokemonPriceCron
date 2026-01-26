@@ -272,6 +272,7 @@ async function updatePriceHistory(today: string) {
     const { data, error } = await supabase
       .from('products')
       .select('variant_key, product_id')
+      .order('variant_key', { ascending: true })  // CRITICAL: Required for consistent pagination
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     if (error) {
