@@ -493,14 +493,22 @@ async function updatePriceHistory(today: string) {
   for (const item of batches) {
     // Check for missing required fields (would cause DB skip)
     if (!item.variant_key || !item.date || item.price === null || item.price === undefined) {
-      skippedItems.push({ variant_key: item.variant_key || 'unknown', reason: 'Missing required field (variant_key, date, or price)' });
+      const missing: string[] = [];
+      if (!item.variant_key) missing.push('variant_key');
+      if (!item.date) missing.push('date');
+      if (item.price === null || item.price === undefined) missing.push('price');
+      skippedItems.push({ variant_key: item.variant_key || 'unknown', reason: `Missing: ${missing.join(', ')}` });
       continue;
     }
 
     // Check for new products without metadata (would cause DB skip)
     const isNewProduct = !existingKeys.has(item.variant_key);
     if (isNewProduct && (!item.product_name || !item.group_id || !item.product_id)) {
-      skippedItems.push({ variant_key: item.variant_key, reason: 'New product missing metadata (name, group_id, or product_id)' });
+      const missingMeta: string[] = [];
+      if (!item.product_name) missingMeta.push('product_name');
+      if (!item.group_id) missingMeta.push('group_id');
+      if (!item.product_id) missingMeta.push('product_id');
+      skippedItems.push({ variant_key: item.variant_key, reason: `New product missing: ${missingMeta.join(', ')}` });
       continue;
     }
 
