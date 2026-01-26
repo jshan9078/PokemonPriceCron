@@ -393,12 +393,11 @@ async function updatePriceHistory(today: string) {
           if (newProducts.size <= 20) {
             const existingVariants = productIdToKeys.get(entry.productId);
             if (existingVariants) {
-              console.warn(`🚨 KEY MISMATCH for Product ${entry.productId}:`);
-              console.warn(`   CSV Key: '${key}'`);
-              console.warn(`   DB Keys: ${Array.from(existingVariants).join(', ')}`);
-              console.warn(`   (This product exists but the key changed, likely TCGPlayer data drift)`);
+              console.log(`✨ NEW VARIANT for Product ${entry.productId}:`);
+              console.log(`   New: '${key}'`);
+              console.log(`   Existing: ${Array.from(existingVariants).join(', ')}`);
             } else {
-              console.log(`✨ TRULY NEW Product Detected: ${entry.productId} (${key})`);
+              console.log(`✨ TRULY NEW Product: ${entry.productId} (${key})`);
             }
           }
         }
@@ -486,15 +485,45 @@ async function updatePriceHistory(today: string) {
   }
 
   console.log(`✅ Finished fetching metadata for new products`);
-  console.log(`💾 Updating database with ${batches.length} price records in batches of ${BATCH_SIZE}...`);
 
-  for (let i = 0; i < batches.length; i += BATCH_SIZE) {
+  // Pre-filter and log items that would be skipped by the DB function
+  const validBatches: BatchItem[] = [];
+  const skippedItems: { variant_key: string; reason: string }[] = [];
+
+  for (const item of batches) {
+    // Check for missing required fields (would cause DB skip)
+    if (!item.variant_key || !item.date || item.price === null || item.price === undefined) {
+      skippedItems.push({ variant_key: item.variant_key || 'unknown', reason: 'Missing required field (variant_key, date, or price)' });
+      continue;
+    }
+
+    // Check for new products without metadata (would cause DB skip)
+    const isNewProduct = !existingKeys.has(item.variant_key);
+    if (isNewProduct && (!item.product_name || !item.group_id || !item.product_id)) {
+      skippedItems.push({ variant_key: item.variant_key, reason: 'New product missing metadata (name, group_id, or product_id)' });
+      continue;
+    }
+
+    validBatches.push(item);
+  }
+
+  // Log skipped items to console for analysis
+  if (skippedItems.length > 0) {
+    console.log(`⚠️  Pre-filtered ${skippedItems.length} items that would be skipped:`);
+    for (const item of skippedItems) {
+      console.log(`   - ${item.variant_key}: ${item.reason}`);
+    }
+  }
+
+  console.log(`💾 Updating database with ${validBatches.length} price records in batches of ${BATCH_SIZE}...`);
+
+  for (let i = 0; i < validBatches.length; i += BATCH_SIZE) {
     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-    const totalBatches = Math.ceil(batches.length / BATCH_SIZE);
+    const totalBatches = Math.ceil(validBatches.length / BATCH_SIZE);
     console.log(`  Processing batch ${batchNum}/${totalBatches}...`);
 
     const { data, error } = await supabase.rpc('batch_update_price_history', {
-      batch_data: batches.slice(i, i + BATCH_SIZE)
+      batch_data: validBatches.slice(i, i + BATCH_SIZE)
     });
 
     if (error) {
@@ -502,6 +531,11 @@ async function updatePriceHistory(today: string) {
     } else if (data && data.length > 0) {
       const result = data[0];
       console.log(`    ✅ Updated: ${result.updated_count}, Inserted: ${result.inserted_count}, Skipped: ${result.skipped_count}, Errors: ${result.error_count}`);
+
+      // If DB still reports skips/errors, log them
+      if (result.skipped_count > 0 || result.error_count > 0) {
+        console.log(`    ⚠️  DB reported additional skips/errors. These are likely data issues within the batch.`);
+      }
     }
   }
 
