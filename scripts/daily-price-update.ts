@@ -610,18 +610,31 @@ async function main() {
 
   // Clean up stale metrics for products that weren't updated in this run
   console.log('🔄 Recalculating stale metrics...');
-  const { error: cleanupError, data: cleanupData } = await supabase.rpc('recalculate_stale_metrics', {
-    cutoff_time: scriptStart.toISOString()
-  });
+  let totalStaleUpdated = 0;
+  const STALE_BATCH_SIZE = 1000;
 
-  if (cleanupError) {
-    console.error('❌ Error recalculating stale metrics:', cleanupError);
-  } else {
-    // Check if cleanupData is an array (if returns table) or number (if returns scalar)
-    // The function RETURNS TABLE(updated_count INTEGER)
+  while (true) {
+    const { error: cleanupError, data: cleanupData } = await supabase.rpc('recalculate_stale_metrics', {
+      cutoff_time: scriptStart.toISOString(),
+      batch_size: STALE_BATCH_SIZE
+    });
+
+    if (cleanupError) {
+      console.error('❌ Error recalculating stale metrics:', cleanupError);
+      break;
+    }
+
     const count = cleanupData && cleanupData[0] ? cleanupData[0].updated_count : 0;
-    console.log(`✅ Recalculated metrics for ${count} stale products`);
+    totalStaleUpdated += count;
+
+    console.log(`    Updated batch of ${count} stale products...`);
+
+    if (count < STALE_BATCH_SIZE) {
+      break;
+    }
   }
+
+  console.log(`✅ Recalculated metrics for ${totalStaleUpdated} total stale products`);
 
   console.log(`✅ Completed daily price update for ${today}`);
 }
