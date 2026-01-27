@@ -441,6 +441,7 @@ async function updatePriceHistory(today: string) {
 
   let processedNew = 0;
   let tcgPlayerApiCalls = 0;
+  const sealedStatusCache = new Map<number, boolean>();
   for (const [variantKey, meta] of newProducts.entries()) {
     processedNew++;
     if (processedNew % 10 === 0) {
@@ -499,17 +500,23 @@ async function updatePriceHistory(today: string) {
       let sealed = false;
 
       if (isTrulyNewProduct) {
-        // Rate limiting for TCGPlayer API calls (every 100 calls, wait 5s)
-        tcgPlayerApiCalls++;
-        if (tcgPlayerApiCalls % 100 === 0) {
-          console.log(`  ⏳ API Rate Limit: Pausing 5s after ${tcgPlayerApiCalls} calls...`);
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        }
+        if (sealedStatusCache.has(product.productId)) {
+          sealed = sealedStatusCache.get(product.productId)!;
+          console.log(`  ⚡ Using cached sealed status for ${product.productId}`);
+        } else {
+          // Rate limiting for TCGPlayer API calls (every 100 calls, wait 5s)
+          tcgPlayerApiCalls++;
+          if (tcgPlayerApiCalls % 100 === 0) {
+            console.log(`  ⏳ API Rate Limit: Pausing 5s after ${tcgPlayerApiCalls} calls...`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
 
-        const skus = await getProductSkus(product.productId);
-        sealed = isProductSealed(skus);
-        if (sealed) {
-          console.log(`  📦 Product ${product.productId} is SEALED`);
+          const skus = await getProductSkus(product.productId);
+          sealed = isProductSealed(skus);
+          if (sealed) {
+            console.log(`  📦 Product ${product.productId} is SEALED`);
+          }
+          sealedStatusCache.set(product.productId, sealed);
         }
       } else {
         console.log(`  ⏭️ Skipping sealed check for ${product.productId} (existing product, new variant)`);
