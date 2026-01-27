@@ -384,6 +384,12 @@ async function updatePriceHistory(today: string) {
       const entries = readPriceJson(today, categoryId, groupId);
 
       for (const entry of entries) {
+        // Skip null-finish entries if product already exists with a real finish
+        // These are likely aggregate/summary rows that shouldn't be inserted as separate variants
+        if (!entry.subTypeName && productIdToKeys.has(entry.productId)) {
+          continue;
+        }
+
         const key = variant(entry.productId, entry.subTypeName);
 
         if (!existingKeys.has(key) && !newProducts.has(key)) {
@@ -408,7 +414,7 @@ async function updatePriceHistory(today: string) {
           price: entry.marketPrice!,
           low_price: entry.lowPrice,
           high_price: entry.highPrice,
-          finish: entry.subTypeName || 'Normal',
+          finish: entry.subTypeName || null,  // Keep null; variant_key uses 'Normal' for dedup
           group_id: Number(groupId)
         });
       }
@@ -417,7 +423,24 @@ async function updatePriceHistory(today: string) {
 
   console.log(`📊 Found ${newProducts.size} new products to fetch metadata for`);
 
+  let trulyNewVariants = 0;
+  let newFinishVariants = 0;
+  const uniqueNewProductIds = new Set<number>();
+
+  for (const meta of newProducts.values()) {
+    if (productIdToKeys.has(meta.productId)) {
+      newFinishVariants++;
+    } else {
+      trulyNewVariants++;
+      uniqueNewProductIds.add(meta.productId);
+    }
+  }
+
+  console.log(`   - Truly New Products: ${uniqueNewProductIds.size} IDs (${trulyNewVariants} variants - triggers API calls)`);
+  console.log(`   - New Variants of Existing: ${newFinishVariants} variants`);
+
   let processedNew = 0;
+  let tcgPlayerApiCalls = 0;
   for (const [variantKey, meta] of newProducts.entries()) {
     processedNew++;
     if (processedNew % 10 === 0) {
@@ -470,11 +493,28 @@ async function updatePriceHistory(today: string) {
       }
 
       // Check if product is sealed (all SKUs have conditionId=6/Unopened)
-      const skus = await getProductSkus(product.productId);
-      const sealed = isProductSealed(skus);
-      if (sealed) {
-        console.log(`  📦 Product ${product.productId} is SEALED`);
+      // Only call TCGPlayer API for TRULY new products (product_id not in DB)
+      // Skip for new variants of existing products (same product_id, different finish)
+      const isTrulyNewProduct = !productIdToKeys.has(product.productId);
+      let sealed = false;
+
+      if (isTrulyNewProduct) {
+        // Rate limiting for TCGPlayer API calls (every 100 calls, wait 5s)
+        tcgPlayerApiCalls++;
+        if (tcgPlayerApiCalls % 100 === 0) {
+          console.log(`  ⏳ API Rate Limit: Pausing 5s after ${tcgPlayerApiCalls} calls...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        const skus = await getProductSkus(product.productId);
+        sealed = isProductSealed(skus);
+        if (sealed) {
+          console.log(`  📦 Product ${product.productId} is SEALED`);
+        }
+      } else {
+        console.log(`  ⏭️ Skipping sealed check for ${product.productId} (existing product, new variant)`);
       }
+
       for (const row of batches.filter(b => b.variant_key === variantKey)) {
         row.sealed = sealed;
       }
@@ -491,18 +531,24 @@ async function updatePriceHistory(today: string) {
   const skippedItems: { variant_key: string; reason: string }[] = [];
 
   for (const item of batches) {
-    // Check for missing required fields (would cause DB skip)
-    if (!item.variant_key || !item.date || item.price === null || item.price === undefined) {
+    // Check for missing required fields (variant_key and date are always required)
+    if (!item.variant_key || !item.date) {
       const missing: string[] = [];
       if (!item.variant_key) missing.push('variant_key');
       if (!item.date) missing.push('date');
-      if (item.price === null || item.price === undefined) missing.push('price');
       skippedItems.push({ variant_key: item.variant_key || 'unknown', reason: `Missing: ${missing.join(', ')}` });
       continue;
     }
 
-    // Check for new products without metadata (would cause DB skip)
     const isNewProduct = !existingKeys.has(item.variant_key);
+
+    // For EXISTING products: skip if no price (nothing to update)
+    if (!isNewProduct && (item.price === null || item.price === undefined)) {
+      skippedItems.push({ variant_key: item.variant_key, reason: `Existing product missing price` });
+      continue;
+    }
+
+    // For NEW products: check for required metadata (price is optional, can be null)
     if (isNewProduct && (!item.product_name || !item.group_id || !item.product_id)) {
       const missingMeta: string[] = [];
       if (!item.product_name) missingMeta.push('product_name');
