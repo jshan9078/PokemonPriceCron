@@ -29,6 +29,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/daily-price-update.ts
+            scripts/blacklist.ts
             package.json
             package-lock.json
             tsconfig.json
