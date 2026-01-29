@@ -17,6 +17,8 @@ const TEMP_DOWNLOAD_DIR = process.env.TEMP_DOWNLOAD_DIR || '/tmp/tcg-price-data'
 const DOWNLOAD_BASE_URL = 'https://tcgcsv.com/archive/tcgplayer';
 const SEVEN_ZIP_PATH = process.env.SEVEN_ZIP_PATH || '/Users/jonathan/Downloads/7z2501-mac/7zz';
 
+import { BLACKLISTED_PRODUCTS } from './blacklist';
+
 // TCGPlayer API Configuration
 const TCGPLAYER_API_BASE = 'https://api.tcgplayer.com';
 const TCGPLAYER_CLIENT_ID = process.env.TCGPLAYER_CLIENT_ID;
@@ -59,6 +61,11 @@ interface BatchItem {
   clean_name?: string;
   finish?: string;
   sealed?: boolean;
+}
+
+interface Blacklist {
+  blacklistedProducts: string[];
+  lastUpdated: string | null;
 }
 
 // TCGPlayer API Types
@@ -135,6 +142,10 @@ async function getProductSkus(productId: number): Promise<TcgPlayerSku[]> {
 function isProductSealed(skus: TcgPlayerSku[]): boolean {
   if (skus.length === 0) return false;
   return skus.every(sku => sku.conditionId === UNOPENED_CONDITION_ID);
+}
+
+function loadBlacklist(): Blacklist {
+  return { blacklistedProducts: BLACKLISTED_PRODUCTS, lastUpdated: new Date().toISOString() };
 }
 
 async function tryDownloadForDate(dateStr: string): Promise<boolean> {
@@ -263,6 +274,12 @@ async function fetchGroupsForCategory(categoryId: string): Promise<Map<number, G
 }
 
 async function updatePriceHistory(today: string) {
+  // Load blacklist
+  console.log('🚫 Loading blacklist...');
+  const blacklist = loadBlacklist();
+  const blacklistedSet = new Set(blacklist.blacklistedProducts);
+  console.log(`   - Loaded ${blacklistedSet.size} blacklisted products`);
+
   console.log('📊 Loading existing products from database...');
   let allProducts: { variant_key: string; product_id: number }[] = [];
   let page = 0;
@@ -375,6 +392,7 @@ async function updatePriceHistory(today: string) {
 
   const batches: BatchItem[] = [];
   const newProducts = new Map<string, { categoryId: string; groupId: string; productId: number }>();
+  let blacklistedSkipped = 0;
 
   for (const categoryId of ['3', '85']) {
     const categoryPath = path.join(DATA_DIR, today, categoryId);
@@ -391,6 +409,12 @@ async function updatePriceHistory(today: string) {
         }
 
         const key = variant(entry.productId, entry.subTypeName);
+
+        // Check blacklist
+        if (blacklistedSet.has(key)) {
+          blacklistedSkipped++;
+          continue;
+        }
 
         if (!existingKeys.has(key) && !newProducts.has(key)) {
           newProducts.set(key, { categoryId, groupId, productId: entry.productId });
@@ -421,6 +445,7 @@ async function updatePriceHistory(today: string) {
     }
   }
 
+  console.log(`🚫 Skipped ${blacklistedSkipped} blacklisted products`);
   console.log(`📊 Found ${newProducts.size} new products to fetch metadata for`);
 
   let trulyNewVariants = 0;

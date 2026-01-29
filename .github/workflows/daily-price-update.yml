@@ -32,20 +32,8 @@ jobs:
             package.json
             package-lock.json
             tsconfig.json
-            product-blacklist.json
+
           sparse-checkout-cone-mode: false
-
-      # Restore blacklist from cache
-      - name: Restore blacklist cache
-        uses: actions/cache/restore@v4
-        with:
-          path: product-blacklist.json
-          key: product-blacklist-${{ github.run_id }}
-          restore-keys: |
-            product-blacklist-
-
-      - name: Show blacklist contents
-        run: cat product-blacklist.json
 
       # Install p7zip for 7z extraction
       - name: Install 7zip
@@ -77,12 +65,6 @@ jobs:
         run: |
           npx tsx scripts/daily-price-update.ts
 
-      # Save updated blacklist to cache
-      - name: Save blacklist cache
-        uses: actions/cache/save@v4
-        if: always()  # Save even if the update script fails
-        with:
-          path: product-blacklist.json
-          key: product-blacklist-${{ github.run_id }}
+      # Cleanup is automatic - GitHub Actions runner is destroyed after job
 
       # Cleanup is automatic - GitHub Actions runner is destroyed after job
